@@ -1,0 +1,218 @@
+from datetime import datetime, timezone
+import yfinance as yf
+from pymongo import MongoClient, ASCENDING, DESCENDING
+
+client = MongoClient("mongodb://localhost:27017")
+db = client["financial_dwh"]
+
+assets_col = db["assets"]
+sources_col = db["data_sources"]
+timeseries_col = db["time_series"]
+
+SOURCE_ID = "yahoo_finance_stocks"
+SOURCE_NAME = "Yahoo Finance"
+
+STOCK_SYMBOLS = ["AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "NVDA"]
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def create_indexes():
+    assets_col.create_index([("asset_id", ASCENDING)], unique=True)
+    sources_col.create_index([("source_id", ASCENDING)], unique=True)
+    timeseries_col.create_index([
+        ("asset_id", ASCENDING),
+        ("source_id", ASCENDING),
+        ("business_date", ASCENDING),
+        ("system_date", DESCENDING)
+    ])
+
+
+def ensure_source():
+    sources_col.update_one(
+        {"source_id": SOURCE_ID},
+        {
+            "$setOnInsert": {
+                "source_id": SOURCE_ID,
+                "name": SOURCE_NAME,
+                "description": "Stock market data from Yahoo Finance via yfinance",
+                "provider_type": "PYTHON_WRAPPER",
+                "base_url": "https://finance.yahoo.com",
+                "dataset_or_endpoint": "Ticker.info + Ticker.history(period='3mo')",
+                "asset_classes_supported": ["stock"],
+                "attributes_supported": ["open", "high", "low", "close", "volume"],
+                "system_date": utc_now()
+            }
+        },
+        upsert=True
+    )
+
+
+def build_asset_doc(symbol, info):
+    return {
+        "asset_id": symbol,
+        "asset_class": "stock",
+        "symbol": symbol,
+        "name": info.get("shortName") or info.get("longName") or symbol,
+        "region": info.get("country", "unknown"),
+        "description": info.get("longBusinessSummary") or info.get("sector") or "Stock from Yahoo Finance",
+        "attributes": {
+            "currency": info.get("currency"),
+            "exchange": info.get("exchange"),
+            "industry": info.get("industry"),
+            "sector": info.get("sector"),
+            "quote_type": info.get("quoteType"),
+            "market": info.get("market"),
+            "website": info.get("website")
+        },
+        "system_date": utc_now()
+    }
+
+
+def ensure_asset(symbol, info):
+    asset_doc = build_asset_doc(symbol, info)
+
+    assets_col.update_one(
+        {"asset_id": symbol},
+        {
+            "$set": {
+                "name": asset_doc["name"],
+                "region": asset_doc["region"],
+                "description": asset_doc["description"],
+                "attributes": asset_doc["attributes"]
+            },
+            "$setOnInsert": {
+                "asset_id": asset_doc["asset_id"],
+                "asset_class": asset_doc["asset_class"],
+                "symbol": asset_doc["symbol"],
+                "system_date": asset_doc["system_date"]
+            }
+        },
+        upsert=True
+    )
+
+
+def safe_float(value):
+    if value is None:
+        return None
+    try:
+        if value != value:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def safe_int(value):
+    if value is None:
+        return None
+    try:
+        if value != value:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def build_values(row):
+    return {
+        "open": safe_float(row.get("Open")),
+        "high": safe_float(row.get("High")),
+        "low": safe_float(row.get("Low")),
+        "close": safe_float(row.get("Close")),
+        "volume": safe_int(row.get("Volume"))
+    }
+
+
+def build_timeseries_doc(symbol, row_date, row, period):
+    return {
+        "asset_id": symbol,
+        "source_id": SOURCE_ID,
+        "business_date": row_date.date().isoformat(),
+        "system_date": utc_now(),
+        "business_year": row_date.year,
+        "values": build_values(row),
+        "deleted": False,
+        "provenance": {
+            "provider": SOURCE_NAME,
+            "library": "yfinance",
+            "symbol": symbol,
+            "period": period
+        }
+    }
+
+
+def latest_existing_doc(symbol, business_date):
+    return timeseries_col.find_one(
+        {
+            "asset_id": symbol,
+            "source_id": SOURCE_ID,
+            "business_date": business_date
+        },
+        sort=[("system_date", DESCENDING)]
+    )
+
+
+def should_insert_new_version(existing_doc, new_doc):
+    if existing_doc is None:
+        return True
+
+    if existing_doc.get("deleted") != new_doc.get("deleted"):
+        return True
+
+    if existing_doc.get("values") != new_doc.get("values"):
+        return True
+
+    return False
+
+
+def ingest_stock(symbol, period="3mo"):
+    print(f"Ingesting {symbol}...")
+
+    ticker = yf.Ticker(symbol)
+    info = ticker.info
+    history = ticker.history(period=period)
+
+    if not info:
+        print(f"Skipping {symbol}: no metadata returned")
+        return
+
+    if history.empty:
+        print(f"Skipping {symbol}: no history returned")
+        return
+
+    ensure_asset(symbol, info)
+
+    inserted_count = 0
+    skipped_count = 0
+
+    for row_date, row in history.iterrows():
+        new_doc = build_timeseries_doc(symbol, row_date, row, period)
+        business_date = new_doc["business_date"]
+
+        existing_doc = latest_existing_doc(symbol, business_date)
+
+        if should_insert_new_version(existing_doc, new_doc):
+            timeseries_col.insert_one(new_doc)
+            inserted_count += 1
+        else:
+            skipped_count += 1
+
+    print(f"{symbol}: inserted={inserted_count}, skipped={skipped_count}")
+
+
+def run(period="3mo"):
+    create_indexes()
+    ensure_source()
+
+    for symbol in STOCK_SYMBOLS:
+        try:
+            ingest_stock(symbol, period=period)
+        except Exception as e:
+            print(f"Error ingesting {symbol}: {e}")
+
+
+if __name__ == "__main__":
+    run(period="3mo")
