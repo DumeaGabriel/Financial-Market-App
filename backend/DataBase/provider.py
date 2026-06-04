@@ -1,38 +1,58 @@
 from datetime import datetime, timezone
 import yfinance as yf
-from pymongo import MongoClient
 
-client = MongoClient("mongodb://localhost:27017")
-db = client["financial_dwh"]
-
-assets_col = db["assets"]
-sources_col = db["data_sources"]
-timeseries_col = db["time_series"]
+from dal import DAL
 
 SOURCE_ID = "yahoo_finance_daily"
 SOURCE_NAME = "Yahoo Finance"
 
-def ensure_source():
-    sources_col.update_one(
-        {"source_id": SOURCE_ID},
-        {
-            "$setOnInsert": {
-                "source_id": SOURCE_ID,
-                "name": SOURCE_NAME,
-                "description": "Daily market data from Yahoo Finance via yfinance",
-                "provider_type": "PYTHON_WRAPPER",
-                "base_url": "https://finance.yahoo.com",
-                "dataset_or_endpoint": "Ticker.history(period='1mo'/'max')",
-                "asset_classes_supported": ["stock"],
-                "attributes_supported": ["open", "high", "low", "close", "volume"],
-                "system_date": datetime.now(timezone.utc).isoformat()
-            }
-        },
-        upsert=True
-    )
+dal = DAL()
+dal.create_indexes()
 
-def ensure_asset(ticker_symbol, info):
-    asset_doc = {
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_float(value):
+    if value is None:
+        return None
+    try:
+        if value != value:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def safe_int(value):
+    if value is None:
+        return None
+    try:
+        if value != value:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def build_source_doc():
+    return {
+        "source_id": SOURCE_ID,
+        "name": SOURCE_NAME,
+        "description": "Daily market data from Yahoo Finance via yfinance",
+        "provider_type": "PYTHON_WRAPPER",
+        "base_url": "https://finance.yahoo.com",
+        "dataset_or_endpoint": "Ticker.history(period='1mo'/'max')",
+        "asset_classes_supported": ["stock"],
+        "attributes_supported": ["open", "high", "low", "close", "volume"],
+        "system_date": utc_now(),
+        "deleted": False
+    }
+
+
+def build_asset_doc(ticker_symbol, info):
+    return {
         "asset_id": ticker_symbol,
         "asset_class": "stock",
         "symbol": ticker_symbol,
@@ -45,66 +65,59 @@ def ensure_asset(ticker_symbol, info):
             "industry": info.get("industry"),
             "quote_type": info.get("quoteType")
         },
-        "system_date": datetime.now(timezone.utc).isoformat()
+        "system_date": utc_now(),
+        "deleted": False
     }
 
-    assets_col.update_one(
-        {"asset_id": ticker_symbol},
-        {"$setOnInsert": asset_doc},
-        upsert=True
-    )
 
-def ingest_ticker(ticker_symbol, period="1mo"):
-    ensure_source()
+def build_timeseries_doc(ticker_symbol, idx, row, period):
+    return {
+        "asset_id": ticker_symbol,
+        "source_id": SOURCE_ID,
+        "business_date": idx.date().isoformat(),
+        "system_date": utc_now(),
+        "business_year": idx.year,
+        "values": {
+            "open": safe_float(row.get("Open")),
+            "high": safe_float(row.get("High")),
+            "low": safe_float(row.get("Low")),
+            "close": safe_float(row.get("Close")),
+            "volume": safe_int(row.get("Volume"))
+        },
+        "deleted": False,
+        "provenance": {
+            "provider": SOURCE_NAME,
+            "library": "yfinance",
+            "symbol": ticker_symbol,
+            "period": period
+        }
+    }
+
+
+def ingest_ticker(ticker_symbol, period="3mo"):
+    dal.data_sources.save_version(build_source_doc())
 
     ticker = yf.Ticker(ticker_symbol)
     info = ticker.info
-    ensure_asset(ticker_symbol, info)
-
     history = ticker.history(period=period)
+
+    dal.assets.save_version(build_asset_doc(ticker_symbol, info))
 
     if history.empty:
         print(f"No history returned for {ticker_symbol}")
         return
 
-    now_system_date = datetime.now(timezone.utc).isoformat()
+    inserted_count = 0
 
     for idx, row in history.iterrows():
-        business_date = idx.date().isoformat()
+        doc = build_timeseries_doc(ticker_symbol, idx, row, period)
+        saved = dal.time_series.save_version(doc)
 
-        doc = {
-            "asset_id": ticker_symbol,
-            "source_id": SOURCE_ID,
-            "business_date": business_date,
-            "system_date": now_system_date,
-            "business_year": idx.year,
-            "values": {
-                "open": None if row.get("Open") != row.get("Open") else float(row.get("Open")),
-                "high": None if row.get("High") != row.get("High") else float(row.get("High")),
-                "low": None if row.get("Low") != row.get("Low") else float(row.get("Low")),
-                "close": None if row.get("Close") != row.get("Close") else float(row.get("Close")),
-                "volume": None if row.get("Volume") != row.get("Volume") else int(row.get("Volume"))
-            },
-            "deleted": False,
-            "provenance": {
-                "provider": SOURCE_NAME,
-                "library": "yfinance",
-                "symbol": ticker_symbol,
-                "period": period
-            }
-        }
+        if saved.get("system_date") == doc["system_date"]:
+            inserted_count += 1
 
-        existing = timeseries_col.find_one({
-            "asset_id": doc["asset_id"],
-            "source_id": doc["source_id"],
-            "business_date": doc["business_date"],
-            "system_date": doc["system_date"]
-        })
+    print(f"Ingestion finished for {ticker_symbol}, inserted={inserted_count}")
 
-        if not existing:
-            timeseries_col.insert_one(doc)
-
-    print(f"Ingestion finished for {ticker_symbol}")
 
 if __name__ == "__main__":
     ingest_ticker("AAPL", period="3mo")

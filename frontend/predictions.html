@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ML Predictions — Financial DWH</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@300,400,500,700&f[]=cabinet-grotesk@500,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="predictions.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script type="module" src="predictions.js" defer></script>
+</head>
+<body>
+  <a class="sr-only" href="#main">Skip to content</a>
+
+  <!-- ── Top bar ── -->
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 48 48" aria-label="Predictions logo" role="img">
+        <rect x="6" y="10" width="14" height="28" rx="3"></rect>
+        <rect x="24" y="6" width="18" height="12" rx="3"></rect>
+        <rect x="24" y="22" width="18" height="16" rx="3"></rect>
+      </svg>
+      <div>
+        <p class="eyebrow-label">Financial platform</p>
+        <h1>ML Predictions</h1>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <a href="main_page.html" class="btn btn-secondary">Warehouse Browser</a>
+        <a href="analytics.html" class="btn btn-secondary">Analytics</a>
+        <a href="update.html" class="btn btn-secondary">Update data</a>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme">
+        <span aria-hidden="true">◐</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main" class="pred-shell">
+
+    <!-- ── Filters ── -->
+    <section class="panel pred-filters" aria-labelledby="filters-title">
+      <div class="section-head">
+        <div>
+          <h2 id="filters-title">Filters</h2>
+          <p>Select asset, model, and date range — then load predictions.</p>
+        </div>
+        <button class="btn btn-primary" id="applyBtn" type="button">Load predictions</button>
+      </div>
+
+      <form id="filtersForm" class="pred-filters-grid">
+        <div class="field">
+          <label for="apiBase">API base URL</label>
+          <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
+        </div>
+
+        <div class="field">
+          <label for="assetSelect">Asset</label>
+          <select id="assetSelect">
+            <option value="">All assets</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="modelSelect">Model type</label>
+          <select id="modelSelect">
+            <option value="">All models</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="startDate">Start date</label>
+          <input id="startDate" type="date" />
+        </div>
+
+        <div class="field">
+          <label for="endDate">End date</label>
+          <input id="endDate" type="date" />
+        </div>
+      </form>
+
+      <p class="status-msg" id="connectionStatus" aria-live="polite">Waiting for API…</p>
+    </section>
+
+    <!-- ── KPI strip ── -->
+    <section class="pred-kpis" aria-label="Prediction quality metrics">
+      <article class="panel pred-kpi">
+        <div class="pred-kpi-label">Predictions loaded</div>
+        <div class="pred-kpi-value" id="kpiCount">—</div>
+        <div class="pred-kpi-sub" id="kpiCountSub">No data yet</div>
+      </article>
+
+      <article class="panel pred-kpi">
+        <div class="pred-kpi-label">Mean Absolute Error</div>
+        <div class="pred-kpi-value" id="kpiMAE">—</div>
+        <div class="pred-kpi-sub">Avg |actual − predicted|</div>
+      </article>
+
+      <article class="panel pred-kpi">
+        <div class="pred-kpi-label">Mean Error %</div>
+        <div class="pred-kpi-value" id="kpiMAPE">—</div>
+        <div class="pred-kpi-sub">Avg % deviation</div>
+      </article>
+
+      <article class="panel pred-kpi">
+        <div class="pred-kpi-label">Best prediction</div>
+        <div class="pred-kpi-value" id="kpiBest">—</div>
+        <div class="pred-kpi-sub" id="kpiBestDate">Smallest absolute error</div>
+      </article>
+
+      <article class="panel pred-kpi">
+        <div class="pred-kpi-label">Worst prediction</div>
+        <div class="pred-kpi-value" id="kpiWorst">—</div>
+        <div class="pred-kpi-sub" id="kpiWorstDate">Largest absolute error</div>
+      </article>
+    </section>
+
+    <!-- ── Chart ── -->
+    <section class="panel pred-chart-panel">
+      <div class="section-head">
+        <div>
+          <h2>Actual vs Predicted — Open Price</h2>
+          <p>Blue line is the actual open price; orange dashed line is the model's prediction.</p>
+        </div>
+        <div class="pred-legend" aria-hidden="true">
+          <span class="pred-legend-dot actual"></span><span>Actual</span>
+          <span class="pred-legend-dot predicted"></span><span>Predicted</span>
+        </div>
+      </div>
+
+      <div class="pred-chart-wrap">
+        <canvas id="predChart" aria-label="Actual vs predicted open price chart"></canvas>
+      </div>
+
+      <p class="status-msg" id="chartStatus">Load predictions to draw the chart.</p>
+    </section>
+
+    <!-- ── Error distribution ── -->
+    <section class="panel pred-error-panel">
+      <div class="section-head">
+        <div>
+          <h2>Prediction Error Distribution</h2>
+          <p>Histogram of (actual − predicted) errors across all loaded records.</p>
+        </div>
+      </div>
+      <div class="pred-chart-wrap pred-chart-wrap--sm">
+        <canvas id="errorChart" aria-label="Error distribution histogram"></canvas>
+      </div>
+      <p class="status-msg" id="errorStatus">Load predictions to draw the error histogram.</p>
+    </section>
+
+    <!-- ── Table ── -->
+    <section class="panel pred-table-panel">
+      <div class="section-head">
+        <div>
+          <h2>Prediction records</h2>
+          <p>All loaded records. Error = actual − predicted. Rows with large errors are highlighted.</p>
+        </div>
+        <span class="badge" id="rowCountBadge">0 rows</span>
+      </div>
+
+      <div id="tableContainer" class="table-empty-pred">No predictions loaded yet.</div>
+    </section>
+
+  </main>
+</body>
+</html>

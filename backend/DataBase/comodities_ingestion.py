@@ -1,53 +1,36 @@
 from datetime import datetime, timezone
+
 import yfinance as yf
-from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError
 
-client = MongoClient("mongodb://localhost:27017")
-db = client["financial_dwh"]
-
-assets_col = db["assets"]
-sources_col = db["data_sources"]
-timeseries_col = db["time_series"]
+from dal import DAL
 
 SOURCE_ID = "yahoo_finance_commodities"
 SOURCE_NAME = "Yahoo Finance"
 
 COMMODITY_SYMBOLS = ["GC=F", "SI=F", "HG=F", "CL=F", "NG=F", "ZC=F"]
 
+dal = DAL()
+dal.create_indexes()
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_indexes():
-    assets_col.create_index([("asset_id", ASCENDING)], unique=True)
-    sources_col.create_index([("source_id", ASCENDING)], unique=True)
-    timeseries_col.create_index([
-        ("asset_id", ASCENDING),
-        ("source_id", ASCENDING),
-        ("business_date", ASCENDING),
-        ("system_date", DESCENDING)
-    ])
-
-
-def ensure_source():
-    sources_col.update_one(
-        {"source_id": SOURCE_ID},
-        {
-            "$setOnInsert": {
-                "source_id": SOURCE_ID,
-                "name": SOURCE_NAME,
-                "description": "Commodity futures market data from Yahoo Finance via yfinance",
-                "provider_type": "PYTHON_WRAPPER",
-                "base_url": "https://finance.yahoo.com",
-                "dataset_or_endpoint": "Ticker.info + Ticker.history(period='3mo')",
-                "asset_classes_supported": ["commodity"],
-                "attributes_supported": ["open", "high", "low", "close", "volume"],
-                "system_date": utc_now()
-            }
-        },
-        upsert=True
-    )
+def build_source_doc():
+    return {
+        "source_id": SOURCE_ID,
+        "name": SOURCE_NAME,
+        "description": "Commodity futures market data from Yahoo Finance via yfinance",
+        "provider_type": "PYTHON_WRAPPER",
+        "base_url": "https://finance.yahoo.com",
+        "dataset_or_endpoint": "Ticker.info + Ticker.history(period='1o')",
+        "asset_classes_supported": ["commodity"],
+        "attributes_supported": ["open", "high", "low", "close", "volume"],
+        "system_date": utc_now(),
+        "deleted": False
+    }
 
 
 def get_ticker_info_safe(ticker):
@@ -92,35 +75,9 @@ def build_asset_doc(symbol, info):
             "market": info.get("market"),
             "instrument_type": "futures"
         },
-        "system_date": utc_now()
+        "system_date": utc_now(),
+        "deleted": False
     }
-
-
-def ensure_asset(symbol, info):
-    asset_doc = build_asset_doc(symbol, info)
-
-    result = assets_col.update_one(
-        {"asset_id": symbol},
-        {
-            "$set": {
-                "asset_class": asset_doc["asset_class"],
-                "symbol": asset_doc["symbol"],
-                "name": asset_doc["name"],
-                "region": asset_doc["region"],
-                "description": asset_doc["description"],
-                "attributes": asset_doc["attributes"]
-            },
-            "$setOnInsert": {
-                "system_date": asset_doc["system_date"]
-            }
-        },
-        upsert=True
-    )
-
-    if result.upserted_id is not None:
-        print(f"Inserted asset: {symbol}")
-    else:
-        print(f"Asset already exists or updated: {symbol}")
 
 
 def safe_float(value):
@@ -173,61 +130,87 @@ def build_timeseries_doc(symbol, row_date, row, period):
     }
 
 
-def latest_existing_doc(symbol, business_date):
-    return timeseries_col.find_one(
-        {
-            "asset_id": symbol,
-            "source_id": SOURCE_ID,
-            "business_date": business_date
-        },
-        sort=[("system_date", DESCENDING)]
-    )
+def save_source_metadata():
+    try:
+        dal.data_sources.save_version(build_source_doc())
+        print(f"Source metadata saved or already present: {SOURCE_ID}")
+    except DuplicateKeyError:
+        print(f"Source metadata already exists: {SOURCE_ID}")
+    except Exception as e:
+        print(f"Source metadata error for {SOURCE_ID}: {e}")
 
 
-def should_insert_new_version(existing_doc, new_doc):
-    if existing_doc is None:
-        return True
-    if existing_doc.get("deleted") != new_doc.get("deleted"):
-        return True
-    if existing_doc.get("values") != new_doc.get("values"):
-        return True
-    return False
+def save_asset_metadata(symbol, info):
+    try:
+        dal.assets.save_version(build_asset_doc(symbol, info))
+        print(f"Asset saved or updated: {symbol}")
+    except DuplicateKeyError:
+        print(f"Asset already exists, continuing with time series: {symbol}")
+    except Exception as e:
+        print(f"Asset save error for {symbol}: {e}")
 
 
-def ingest_commodity(symbol, period="3mo"):
+def ingest_commodity(symbol, period="1y"):
     print(f"Ingesting {symbol}...")
 
     ticker = yf.Ticker(symbol)
     info = get_ticker_info_safe(ticker)
-    history = ticker.history(period=period)
 
-    ensure_asset(symbol, info)
+    try:
+        history = ticker.history(period=period)
+    except Exception as e:
+        print(f"Failed to fetch history for {symbol}: {e}")
+        return
 
-    if history.empty:
+    save_asset_metadata(symbol, info)
+
+    if history is None or history.empty:
         print(f"Skipping time series for {symbol}: no history returned")
         return
 
+    print(f"{symbol}: fetched {len(history)} history rows")
+
     inserted_count = 0
     skipped_count = 0
+    failed_count = 0
 
     for row_date, row in history.iterrows():
-        new_doc = build_timeseries_doc(symbol, row_date, row, period)
-        business_date = new_doc["business_date"]
+        try:
+            new_doc = build_timeseries_doc(symbol, row_date, row, period)
 
-        existing_doc = latest_existing_doc(symbol, business_date)
+            before_count = dal.time_series.collection.count_documents({
+                "asset_id": new_doc["asset_id"],
+                "source_id": new_doc["source_id"],
+                "business_date": new_doc["business_date"]
+            })
 
-        if should_insert_new_version(existing_doc, new_doc):
-            timeseries_col.insert_one(new_doc)
-            inserted_count += 1
-        else:
+            dal.time_series.save_version(new_doc)
+
+            after_count = dal.time_series.collection.count_documents({
+                "asset_id": new_doc["asset_id"],
+                "source_id": new_doc["source_id"],
+                "business_date": new_doc["business_date"]
+            })
+
+            if after_count > before_count:
+                inserted_count += 1
+            else:
+                skipped_count += 1
+
+        except DuplicateKeyError:
             skipped_count += 1
+        except Exception as e:
+            failed_count += 1
+            print(f"Time series save error for {symbol} on {row_date}: {e}")
 
-    print(f"{symbol}: inserted={inserted_count}, skipped={skipped_count}")
+    print(
+        f"{symbol}: time_series inserted={inserted_count}, "
+        f"skipped={skipped_count}, failed={failed_count}"
+    )
 
 
-def run(period="3mo"):
-    create_indexes()
-    ensure_source()
+def run(period="1y"):
+    save_source_metadata()
 
     for symbol in COMMODITY_SYMBOLS:
         try:
@@ -235,6 +218,9 @@ def run(period="3mo"):
         except Exception as e:
             print(f"Error ingesting {symbol}: {e}")
 
+    total_ts = dal.time_series.collection.count_documents({})
+    print(f"Total documents in time_series: {total_ts}")
+
 
 if __name__ == "__main__":
-    run(period="3mo")
+    run(period="1y")

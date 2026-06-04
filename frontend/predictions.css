@@ -1,0 +1,317 @@
+/* ── Predictions Dashboard — supplemental styles ─────────────────────────── */
+/* Builds on the shared style.css design tokens.                               */
+/* Aesthetic: precision instrument — clean data-science dashboard.             */
+
+/* ── Shell ── */
+.pred-shell {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* ── Eyebrow label (shared with analytics) ── */
+.eyebrow-label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* ── Filters ── */
+.pred-filters {
+  padding: var(--space-6);
+}
+
+.pred-filters-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.field label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.field input,
+.field select {
+  min-height: 44px;
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  padding: 0 var(--space-3);
+  font: inherit;
+}
+
+.status-msg {
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  min-height: 1.4em;
+}
+
+/* ── KPI strip ── */
+.pred-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-4);
+}
+
+.pred-kpi {
+  padding: var(--space-5);
+  position: relative;
+  overflow: hidden;
+}
+
+.pred-kpi::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--color-primary);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.pred-kpi-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pred-kpi-value {
+  font-size: var(--text-xl);
+  font-family: var(--font-display, "Cabinet Grotesk", sans-serif);
+  font-weight: 700;
+  line-height: 1.1;
+  margin-top: var(--space-2);
+  color: var(--color-text);
+}
+
+.pred-kpi-sub {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+
+/* ── Chart panels ── */
+.pred-chart-panel,
+.pred-error-panel {
+  padding: var(--space-6);
+}
+
+/* Two-column layout for chart + error side by side */
+.pred-chart-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: var(--space-6);
+}
+
+.pred-chart-wrap {
+  position: relative;
+  height: 360px;
+  margin-top: var(--space-4);
+}
+
+.pred-chart-wrap--sm {
+  height: 240px;
+}
+
+/* ── Legend ── */
+.pred-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.pred-legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.pred-legend-dot.actual {
+  background: #4f98a3;
+}
+
+.pred-legend-dot.predicted {
+  background: #e8af34;
+  opacity: 0.85;
+}
+
+/* ── Table panel ── */
+.pred-table-panel {
+  padding: var(--space-6);
+}
+
+.table-empty-pred {
+  padding: var(--space-10);
+  text-align: center;
+  color: var(--color-text-muted);
+  border: 1px dashed color-mix(in srgb, var(--color-text) 15%, transparent);
+  border-radius: var(--radius-lg);
+}
+
+.pred-table-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.pred-table-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+  font-size: var(--text-sm);
+}
+
+.pred-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
+  white-space: nowrap;
+}
+
+.pred-table-scroll thead th.th-actual {
+  color: #4f98a3;
+}
+.pred-table-scroll thead th.th-predicted {
+  color: #e8af34;
+}
+.pred-table-scroll thead th.th-error {
+  color: var(--color-text-muted);
+}
+
+.pred-table-scroll tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 6%, transparent);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.pred-table-scroll tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pred-table-scroll tbody tr:hover td {
+  background: color-mix(in srgb, var(--color-primary) 5%, transparent);
+}
+
+/* High-error rows — soft warning tint */
+.pred-table-scroll tbody tr.row-warn td {
+  background: color-mix(in srgb, #e8af34 6%, transparent);
+}
+
+.pred-table-scroll tbody tr.row-warn:hover td {
+  background: color-mix(in srgb, #e8af34 10%, transparent);
+}
+
+/* Error cell colouring */
+.err-positive { color: var(--color-success, #437a22); font-weight: 600; }
+.err-negative { color: var(--color-error, #a12c7b); font-weight: 600; }
+.err-neutral  { color: var(--color-text-muted); }
+
+/* Accuracy pill */
+.accuracy-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.accuracy-pill.good   { background: color-mix(in srgb, var(--color-success, #437a22) 15%, transparent); color: var(--color-success, #437a22); }
+.accuracy-pill.medium { background: color-mix(in srgb, #e8af34 15%, transparent); color: #e8af34; }
+.accuracy-pill.poor   { background: color-mix(in srgb, var(--color-error, #a12c7b) 15%, transparent); color: var(--color-error, #a12c7b); }
+
+/* Badge (reuse from main style if available) */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: .35rem .7rem;
+  border-radius: var(--radius-full);
+  background: var(--color-primary-highlight);
+  color: var(--color-primary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* ── Accessibility ── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ── Responsive ── */
+@media (max-width: 1200px) {
+  .pred-kpis {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .pred-chart-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .pred-filters-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pred-kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .pred-shell {
+    padding: var(--space-4);
+  }
+  .pred-filters,
+  .pred-chart-panel,
+  .pred-error-panel,
+  .pred-table-panel {
+    padding: var(--space-4);
+  }
+  .pred-filters-grid,
+  .pred-kpis {
+    grid-template-columns: 1fr;
+  }
+  .pred-legend {
+    display: none;
+  }
+}

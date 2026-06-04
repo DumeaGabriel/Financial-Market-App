@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monthly Analytics Dashboard</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@300,400,500,700&f[]=cabinet-grotesk@500,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="analytics.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script type="module" src="analytics.js" defer></script>
+</head>
+<body>
+  <a class="sr-only" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 48 48" aria-label="Analytics logo" role="img">
+        <rect x="6" y="10" width="14" height="28" rx="3"></rect>
+        <rect x="24" y="6" width="18" height="12" rx="3"></rect>
+        <rect x="24" y="22" width="18" height="16" rx="3"></rect>
+      </svg>
+      <div>
+        <p class="eyebrow-label">Financial platform</p>
+        <h1>Monthly Analytics</h1>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <a href="main_page.html" class="btn btn-secondary">Warehouse Browser</a>
+        <a href="predictions.html" class="btn btn-secondary">Prediction</a>
+        <a href="update.html" class="btn btn-secondary">Update data</a>
+
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme">
+        <span aria-hidden="true">◐</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main" class="analytics-shell">
+
+    <!-- Filters -->
+    <section class="panel analytics-filters" aria-labelledby="filters-title">
+      <div class="section-head">
+        <div>
+          <h2 id="filters-title">Filters</h2>
+          <p>Choose one or more filters, then load monthly summary records.</p>
+        </div>
+        <button class="btn btn-primary" id="applyBtn" type="button">Apply filters</button>
+      </div>
+
+      <form id="filtersForm" class="filters-grid">
+        <div class="field">
+          <label for="apiBase">API base URL</label>
+          <input id="apiBase" name="apiBase" type="text" value="http://127.0.0.1:8000" />
+        </div>
+
+        <div class="field">
+          <label for="assetId">Asset</label>
+          <select id="assetId" name="assetId">
+            <option value="">All assets</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="symbol">Symbol</label>
+          <select id="symbol" name="symbol">
+            <option value="">All symbols</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="assetClass">Asset class</label>
+          <select id="assetClass" name="assetClass">
+            <option value="">All classes</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="startYear">Start year</label>
+          <input id="startYear" name="startYear" type="number" placeholder="2024" />
+        </div>
+
+        <div class="field">
+          <label for="endYear">End year</label>
+          <input id="endYear" name="endYear" type="number" placeholder="2026" />
+        </div>
+      </form>
+
+      <p class="status-msg" id="connectionStatus" aria-live="polite">Waiting for API connection…</p>
+    </section>
+
+    <!-- KPI cards -->
+    <section class="kpis" aria-label="Summary metrics">
+      <article class="panel kpi">
+        <div class="kpi-label">Rows returned</div>
+        <div class="kpi-value" id="kpiRows">0</div>
+        <div class="kpi-sub" id="kpiRowsSub">No data loaded yet</div>
+      </article>
+
+      <article class="panel kpi">
+        <div class="kpi-label">Latest month</div>
+        <div class="kpi-value" id="kpiLatestMonth">—</div>
+        <div class="kpi-sub">Newest period in the result set</div>
+      </article>
+
+      <article class="panel kpi">
+        <div class="kpi-label">Distinct assets</div>
+        <div class="kpi-value" id="kpiAssets">0</div>
+        <div class="kpi-sub">Unique asset IDs in current query</div>
+      </article>
+
+      <article class="panel kpi">
+        <div class="kpi-label">Distinct symbols</div>
+        <div class="kpi-value" id="kpiSymbols">0</div>
+        <div class="kpi-sub">Unique symbols in current query</div>
+      </article>
+    </section>
+
+    <!-- Chart + metric selector -->
+    <section class="panel analytics-chart-panel">
+      <div class="section-head">
+        <div>
+          <h2>Monthly trend</h2>
+          <p>Select a metric to plot across all returned records.</p>
+        </div>
+        <div class="metric-selector-wrap">
+          <label for="metricSelect" class="sr-only">Metric</label>
+          <select id="metricSelect" class="metric-select">
+            <option value="">— pick metric —</option>
+          </select>
+          <span class="badge" id="metricBadge">No data</span>
+        </div>
+      </div>
+
+      <div class="chart-wrap">
+        <canvas id="trendChart" aria-label="Monthly analytics trend chart"></canvas>
+      </div>
+
+      <p class="status-msg" id="chartStatus">Load data to draw the trend.</p>
+    </section>
+
+    <!-- Data table -->
+    <section class="panel analytics-table-panel">
+      <div class="section-head">
+        <div>
+          <h2>Data preview</h2>
+          <p>All records returned by the analytics endpoint, with metrics expanded.</p>
+        </div>
+      </div>
+
+      <div id="tableContainer" class="table-empty">No records loaded yet.</div>
+    </section>
+
+  </main>
+</body>
+</html>
