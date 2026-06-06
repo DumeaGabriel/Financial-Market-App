@@ -239,9 +239,9 @@ function renderChart(records = []) {
     });
 }
 
-function toEntityRows(label, versions = []) {
+function toEntityRows(versions = []) {
     return sortBySystemDateDesc(versions).map((version) => ({
-        businessDate: label,
+        businessDate: version.businessDate || version.business_date || "",
         systemDate: getSystemDateValue(version),
         values: version
     }));
@@ -321,7 +321,7 @@ async function handleQuerySubmit(event) {
         if (assetId && !dataSourceId) {
             const history = await fetchAssetHistory(baseUrl, assetId);
             const versions = history?.versions ?? [];
-            renderRecords(toEntityRows(`Asset: ${assetId}`, versions));
+            renderRecords(toEntityRows(versions));
             renderAttributes(getEntityAttributes(versions));
             setMessage(`Showing asset collection for ${assetId}.`, "ok");
             return;
@@ -330,7 +330,7 @@ async function handleQuerySubmit(event) {
         if (!assetId && dataSourceId) {
             const history = await fetchDataSourceHistory(baseUrl, dataSourceId);
             const versions = history?.versions ?? [];
-            renderRecords(toEntityRows(`Source: ${dataSourceId}`, versions));
+            renderRecords(toEntityRows(versions));
             renderAttributes(getEntityAttributes(versions));
             setMessage(`Showing data source collection for ${dataSourceId}.`, "ok");
             return;

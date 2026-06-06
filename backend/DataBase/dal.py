@@ -370,19 +370,12 @@ class TimeSeriesRepository:
         query = dict(filters)
         query["deleted"] = {"$ne": True}
 
-        rows = list(
+        return list(
             self.collection.find(query, {"_id": 0})
             .sort([("business_date", DESCENDING), ("system_date", DESCENDING)])
+            .skip(offset)
+            .limit(limit)
         )
-
-        latest_per_day: Dict[str, Dict[str, Any]] = {}
-        for row in rows:
-            business_date = row["business_date"]
-            if business_date not in latest_per_day:
-                latest_per_day[business_date] = row
-
-        deduped_rows = list(latest_per_day.values())
-        return deduped_rows[offset:offset + limit]
 
     def list_available_business_dates(
         self,

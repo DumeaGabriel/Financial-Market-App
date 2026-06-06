@@ -17,7 +17,6 @@ dal.create_indexes()
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
-
 def build_source_doc():
     return {
         "source_id": SOURCE_ID,
@@ -25,7 +24,7 @@ def build_source_doc():
         "description": "Commodity futures market data from Yahoo Finance via yfinance",
         "provider_type": "PYTHON_WRAPPER",
         "base_url": "https://finance.yahoo.com",
-        "dataset_or_endpoint": "Ticker.info + Ticker.history(period='1o')",
+        "dataset_or_endpoint": "Ticker.info + Ticker.history(period='1y')",
         "asset_classes_supported": ["commodity"],
         "attributes_supported": ["open", "high", "low", "close", "volume"],
         "system_date": utc_now(),
