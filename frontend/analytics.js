@@ -49,7 +49,6 @@ function monthLabel(item) {
  */
 function getMetrics(item) {
   if (item.metrics && typeof item.metrics === "object") return item.metrics;
-  // fallback: pick numeric keys that aren't year/month
   const out = {};
   for (const [k, v] of Object.entries(item)) {
     if (typeof v === "number" && !["year", "month"].includes(k)) out[k] = v;
@@ -63,7 +62,6 @@ function allMetricKeys(items) {
   for (const item of items) {
     for (const k of Object.keys(getMetrics(item))) keys.add(k);
   }
-  // preferred display order
   const order = [
     "avg_close", "avg_open", "min_low", "max_high",
     "avg_volume", "total_volume", "monthly_return_pct", "count",
@@ -179,7 +177,6 @@ function populateMetricSelect(items) {
     '<option value="">— pick metric —</option>' +
     keys.map((k) => `<option value="${k}">${k}</option>`).join("");
 
-  // default to avg_close if present
   const preferred = ["avg_close", "avg_open", "monthly_return_pct"];
   const best = preferred.find((k) => keys.includes(k));
   if (keys.includes(current)) {
@@ -210,7 +207,6 @@ function renderChart(items, metricKey) {
 
   const sorted = [...items].sort((a, b) => monthLabel(a).localeCompare(monthLabel(b)));
 
-  // Group by asset for multi-series when multiple assets are present
   const byAsset = new Map();
   for (const item of sorted) {
     const key = item.symbol || item.asset_id || "unknown";
@@ -218,7 +214,6 @@ function renderChart(items, metricKey) {
     byAsset.get(key).push(item);
   }
 
-  // Build a superset of all labels (months)
   const labelSet = new Set(sorted.map(monthLabel));
   const labels = [...labelSet].sort();
 
@@ -364,25 +359,29 @@ async function loadAnalytics() {
     renderTable([]);
     renderChart([], "");
   }
+  el("connectionStatus").textContent = `Loaded ${items.length} monthly analytics records.`;
+    document.querySelector(".analytics-shell").classList.add("filters-applied");
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
-applyTheme(state.theme);
+document.addEventListener("DOMContentLoaded", () => {
+  applyTheme(state.theme);
 
-el("themeToggle").addEventListener("click", () => {
-  applyTheme(state.theme === "dark" ? "light" : "dark");
+  el("themeToggle").addEventListener("click", () => {
+    applyTheme(state.theme === "dark" ? "light" : "dark");
+  });
+
+  el("applyBtn").addEventListener("click", loadAnalytics);
+
+  el("filtersForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    loadAnalytics();
+  });
+
+  el("metricSelect").addEventListener("change", () => {
+    renderChart(state.items, el("metricSelect").value);
+  });
+
+  initialize();
 });
-
-el("refreshBtn").addEventListener("click", () => initialize(true));
-el("applyBtn").addEventListener("click", loadAnalytics);
-el("filtersForm").addEventListener("submit", (e) => {
-  e.preventDefault();
-  loadAnalytics();
-});
-
-el("metricSelect").addEventListener("change", () => {
-  renderChart(state.items, el("metricSelect").value);
-});
-
-initialize();

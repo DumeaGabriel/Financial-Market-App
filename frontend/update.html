@@ -143,6 +143,58 @@
                 </div>
             </form>
         </section>
+
+        <section class="panel">
+            <div class="section-head">
+                <h2>Edit time-series entry</h2>
+            </div>
+
+            <div class="query-grid">
+                <label>
+                    <span>Asset ID</span>
+                    <input id="ts-asset-id" type="text" placeholder="AAPL" />
+                </label>
+
+                <label>
+                    <span>Data source ID</span>
+                    <input id="ts-source-id" type="text" placeholder="yahoo_finance_stocks" />
+                </label>
+
+                <label>
+                    <span>Business date (optional — omit for latest)</span>
+                    <input id="ts-date" type="date" />
+                </label>
+
+                <div class="actions">
+                    <button type="button" id="load-ts" class="btn btn-primary">Load time-series entry</button>
+                </div>
+            </div>
+
+            <p style="margin-top: 8px; opacity: 0.75; font-size: 0.9rem;">
+                Leave date blank to load the most recent entry. If multiple records share the same date, the one with the latest system date is shown.
+            </p>
+        </section>
+
+        <section class="panel">
+            <div class="section-head">
+                <h2>Time-series preview</h2>
+            </div>
+            <pre id="ts-preview" class="log-box">No time-series entry loaded yet.</pre>
+        </section>
+
+        <section class="panel">
+            <div class="section-head">
+                <h2>Edit time-series values</h2>
+            </div>
+
+            <form id="ts-edit-form" class="query-grid">
+                <div id="ts-dynamic-fields" class="dynamic-fields"></div>
+
+                <div class="actions">
+                    <button type="submit" class="btn btn-primary">Save time-series changes</button>
+                </div>
+            </form>
+        </section>
     </section>
 </main>
 </body>

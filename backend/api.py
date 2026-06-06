@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 
 from DataBase.dal import DAL
 
+from datetime import datetime, timedelta, timezone
 
 app = FastAPI(
     title="Financial Data Warehouse API",
@@ -35,6 +37,11 @@ class UpdateRequest(BaseModel):
 
 class EntityFieldsUpdateRequest(BaseModel):
     fields: Dict[str, Any]
+
+
+class TimeSeriesUpdateRequest(BaseModel):
+    businessDate: str
+    values: Dict[str, Any]
 
 
 def not_found(detail: str) -> HTTPException:
@@ -162,17 +169,19 @@ def update_data_source_admin(
 
 @app.get("/api/v1/data")
 def get_time_series(
-    assetId: str = Query(..., min_length=1),
-    dataSourceId: str = Query(..., min_length=1),
-    startBusinessDate: str = Query(..., min_length=10),
-    endBusinessDate: str = Query(..., min_length=10),
-    includeAttributes: bool = Query(False)
+    assetId: str = Query(...),
+    dataSourceId: str = Query(...),
+    startBusinessDate: str = Query(...),
+    endBusinessDate: str = Query(...),
+    includeAttributes: bool = Query(False),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=365)
 ) -> Dict[str, Any]:
-    records = dal.time_series.find_series(
-        asset_id=assetId,
-        source_id=dataSourceId,
-        start_business_date=startBusinessDate,
-        end_business_date=endBusinessDate
+    records = dal.time_series.find_series_by_filter(
+        filters={"asset_id": assetId, "source_id": dataSourceId,
+                 "business_date": {"$gte": startBusinessDate, "$lt": endBusinessDate}},
+        offset=offset,
+        limit=limit
     )
 
     response: Dict[str, Any] = {
@@ -227,6 +236,42 @@ def get_time_series_versions_for_day(
         "versions": versions
     }
 
+
+@app.put("/api/v1/admin/time-series/{asset_id}/{source_id}")
+def update_time_series_admin(
+    asset_id: str,
+    source_id: str,
+    req: TimeSeriesUpdateRequest
+) -> Dict[str, Any]:
+    next_date = (
+            datetime.strptime(req.businessDate, "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+
+    records = dal.time_series.find_series_by_filter(
+        filters={
+            "asset_id": asset_id,
+            "source_id": source_id,
+            "business_date": {"$gte": req.businessDate, "$lt": next_date}
+        },
+        offset=0,
+        limit=100
+    )
+
+    if not records:
+        raise not_found(
+            f"No time-series record found for assetId='{asset_id}', "
+            f"dataSourceId='{source_id}', businessDate='{req.businessDate}'"
+        )
+
+    # Pick the record with the latest system_date
+    record = max(records, key=lambda r: r.get("system_date", ""))
+
+    updated = dict(record)
+    updated["values"] = req.values
+    updated["system_date"] = datetime.now(timezone.utc).isoformat()
+
+    saved = dal.time_series.save(updated)
+    return saved
 
 @app.post("/api/v1/admin/update/stocks")
 def update_stocks(req: UpdateRequest) -> Dict[str, Any]:

@@ -329,6 +329,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
                 arguments.get("limit", DEFAULT_LIMIT),
             )
             data = await _get("/api/v1/assets", params={"offset": offset, "limit": limit})
+            data["_provenance"] = {
+                "warehouse": "financial-dwh",
+                "endpoint": "/api/v1/assets",
+                "semantics": "latest non-deleted version per asset",
+                "retrievedAt": datetime.utcnow().isoformat() + "Z",
+            }
             return _ok(data)
         except ValueError as e:
             return _error(f"Invalid input: {e}")
@@ -346,6 +352,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
             if not asset_id:
                 return _error("Invalid input: 'assetId' is required and must not be empty.")
             data = await _get(f"/api/v1/assets/{asset_id}")
+            data["_provenance"] = {
+                "warehouse": "financial-dwh",
+                "endpoint": f"/api/v1/assets/{asset_id}",
+                "assetId": asset_id,
+                "semantics": "latest non-deleted version of the asset record",
+                "retrievedAt": datetime.utcnow().isoformat() + "Z",
+            }
             return _ok(data)
         except LookupError as e:
             return _error(f"Asset not found: {e}")
@@ -364,6 +377,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
                 arguments.get("limit", DEFAULT_LIMIT),
             )
             data = await _get("/api/v1/data-sources", params={"offset": offset, "limit": limit})
+            data["_provenance"] = {
+                "warehouse": "financial-dwh",
+                "endpoint": "/api/v1/data-sources",
+                "semantics": "latest non-deleted version per data source",
+                "retrievedAt": datetime.utcnow().isoformat() + "Z",
+            }
             return _ok(data)
         except ValueError as e:
             return _error(f"Invalid input: {e}")
@@ -381,6 +400,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
             if not source_id:
                 return _error("Invalid input: 'dataSourceId' is required and must not be empty.")
             data = await _get(f"/api/v1/data-sources/{source_id}")
+            data["_provenance"] = {
+                "warehouse": "financial-dwh",
+                "endpoint": f"/api/v1/data-sources/{source_id}",
+                "dataSourceId": source_id,
+                "semantics": "latest non-deleted version of the data source record",
+                "retrievedAt": datetime.utcnow().isoformat() + "Z",
+            }
             return _ok(data)
         except LookupError as e:
             return _error(f"Data source not found: {e}")
@@ -482,6 +508,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
                 params["endMonth"] = int(arguments["endMonth"])
 
             data = await _get("/api/v1/analytics/monthly", params=params)
+            data["_provenance"] = {
+                "warehouse": "financial-dwh",
+                "endpoint": "/api/v1/analytics/monthly",
+                "filters": {k: v for k, v in params.items() if k not in ("offset", "limit")},
+                "semantics": "pre-computed monthly aggregations from warehouse time-series data",
+                "retrievedAt": datetime.utcnow().isoformat() + "Z",
+            }
             return _ok(data)
 
         except ValueError as e:
@@ -533,6 +566,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
 
             data = await _get("/api/v1/analytics/predictions", params=params)
             data["_disclaimer"] = "Predictions are model output only and do not constitute financial advice."
+            data["_provenance"] = {
+                "warehouse": "financial-dwh",
+                "endpoint": "/api/v1/analytics/predictions",
+                "filters": {k: v for k, v in params.items() if k not in ("offset", "limit")},
+                "semantics": "ML model predictions stored in warehouse, not real-time inference",
+                "retrievedAt": datetime.utcnow().isoformat() + "Z",
+            }
             return _ok(data)
 
         except ValueError as e:

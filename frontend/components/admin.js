@@ -71,6 +71,13 @@ export async function fetchTimeSeries(
     return getJson(`${baseUrl}/data?${params.toString()}`, "Failed to fetch time series");
 }
 
+export async function updateTimeSeries(baseUrl, assetId, sourceId, payload) {
+    return putJson(
+        `${baseUrl}/admin/time-series/${encodeURIComponent(assetId)}/${encodeURIComponent(sourceId)}`,
+        payload
+    );
+}
+
 async function getJson(url, fallbackMessage) {
     const response = await fetch(url);
 
