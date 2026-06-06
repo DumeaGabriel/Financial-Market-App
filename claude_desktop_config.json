@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "financial-dwh": {
+      "command": "D:\\Faculta\\DataWearhous\\Project\\.venv\\Scripts\\python.exe",
+      "args": ["D:\\Faculta\\DataWearhous\\Project\\backend\\mcp_server.py"]
+    }
+  },
+  "preferences": {
+    "remoteToolsDeviceName": "gabi",
+    "coworkWebSearchEnabled": true,
+    "coworkScheduledTasksEnabled": false,
+    "ccdScheduledTasksEnabled": false,
+    "coworkModelAutoFallbackByAccount": {
+      "dfeb2b78-4ccf-402c-adf0-bcd360262a79": true
+    },
+    "bypassPermissionsGateByAccount": {
+      "dfeb2b78-4ccf-402c-adf0-bcd360262a79": false
+    },
+    "epitaxyPrefs": {
+      "starred-local-code-sessions": [],
+      "starred-cowork-spaces": [],
+      "starred-session-groups": [],
+      "dframe-local-slice": {
+        "pinnedOrder": [],
+        "customGroupAssignments": {},
+        "customGroupOrder": {}
+      }
+    }
+  },
+  "coworkUserFilesPath": "C:\\Users\\gabid\\Claude"
+}
