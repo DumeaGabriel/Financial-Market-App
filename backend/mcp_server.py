@@ -5,23 +5,34 @@ Exposes the Financial DWH REST API as MCP tools for Claude Desktop (and other MC
 All tools are read-only and call the existing FastAPI consumption layer.
 
 Usage:
-    pip install mcp httpx
+    pip install mcp httpx python-dotenv
     python mcp_server.py
+
+Environment variables (set in shell, .env file, or Claude Desktop config):
+    DWH_API_BASE_URL        FastAPI base URL (default: http://localhost:8000)
+    DWH_MAX_LIMIT           Hard cap on page size (default: 100)
+    DWH_MAX_DATE_RANGE_DAYS Max date range for time-series queries (default: 365)
+    DWH_DEFAULT_LIMIT       Default page size (default: 20)
+    DWH_EARLIEST_DATE       Earliest accepted date, YYYY-MM-DD (default: 2000-01-01)
 
 Claude Desktop config (claude_desktop_config.json):
     {
         "mcpServers": {
             "financial-dwh": {
                 "command": "python",
-                "args": ["C:/full/path/to/mcp_server.py"]
+                "args": ["mcp_server.py"],
+                "env": {
+                    "DWH_API_BASE_URL": "http://localhost:8000"
+                }
             }
         }
     }
 """
 
 import json
+import os
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any, Dict, Optional
 
 import httpx
@@ -29,35 +40,107 @@ import mcp.server.stdio
 import mcp.types as types
 from mcp.server import Server
 
+# Load .env file if present (requires python-dotenv; silently skipped if not installed)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — all values overridable via environment variables
 # ---------------------------------------------------------------------------
 
-API_BASE_URL = "http://localhost:8000"   # Your FastAPI base URL
-MAX_LIMIT = 100                          # Hard cap on page size
-MAX_DATE_RANGE_DAYS = 365               # Max allowed date range for time-series queries
-DEFAULT_LIMIT = 20
-DEFAULT_OFFSET = 0
+API_BASE_URL        = os.getenv("DWH_API_BASE_URL",        "http://localhost:8000")
+MAX_LIMIT           = int(os.getenv("DWH_MAX_LIMIT",           "100"))
+MAX_DATE_RANGE_DAYS = int(os.getenv("DWH_MAX_DATE_RANGE_DAYS", "365"))
+DEFAULT_LIMIT       = int(os.getenv("DWH_DEFAULT_LIMIT",       "20"))
+DEFAULT_OFFSET      = 0
+
+_EARLIEST_DATE_STR  = os.getenv("DWH_EARLIEST_DATE", "2000-01-01")
+EARLIEST_DATE       = datetime.strptime(_EARLIEST_DATE_STR, "%Y-%m-%d").date()
+# Allow predictions up to 2 years in the future; adjust via DWH_MAX_DATE_RANGE_DAYS if needed
+LATEST_DATE         = date.today() + timedelta(days=365 * 2)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _validate_date(value: str, field_name: str) -> date:
-    """Parse and validate a YYYY-MM-DD date string."""
+    """
+    Parse and validate a YYYY-MM-DD date string.
+
+    Checks:
+    - Format matches YYYY-MM-DD
+    - Is a real calendar date (no Feb 30, etc.)
+    - Falls within [EARLIEST_DATE, LATEST_DATE]
+    """
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         raise ValueError(f"'{field_name}' must be in YYYY-MM-DD format, got: '{value}'")
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError:
         raise ValueError(f"'{field_name}' is not a valid calendar date: '{value}'")
+    if parsed < EARLIEST_DATE:
+        raise ValueError(
+            f"'{field_name}' ({value}) is before the earliest accepted date ({EARLIEST_DATE}). "
+            "Check for typos (e.g. wrong century)."
+        )
+    if parsed > LATEST_DATE:
+        raise ValueError(
+            f"'{field_name}' ({value}) is too far in the future (max accepted: {LATEST_DATE})."
+        )
+    return parsed
+
+
+def _validate_date_range(start_str: str, end_str: str) -> tuple[date, date]:
+    """
+    Validate a pair of YYYY-MM-DD date strings as a half-open range [start, end).
+
+    Raises ValueError if either date is invalid, end <= start, or the range
+    exceeds MAX_DATE_RANGE_DAYS.
+    """
+    start_date = _validate_date(start_str, "startBusinessDate")
+    end_date   = _validate_date(end_str,   "endBusinessDate")
+    if end_date <= start_date:
+        raise ValueError(
+            f"'endBusinessDate' ({end_str}) must be after 'startBusinessDate' ({start_str}). "
+            "Note: the range is half-open [start, end)."
+        )
+    delta = (end_date - start_date).days
+    if delta > MAX_DATE_RANGE_DAYS:
+        raise ValueError(
+            f"Date range too large: {delta} days requested, maximum allowed is "
+            f"{MAX_DATE_RANGE_DAYS} days. Please narrow your range and paginate if needed."
+        )
+    return start_date, end_date
+
+
+def _validate_month_range(
+    start_year: Optional[int],
+    start_month: Optional[int],
+    end_year: Optional[int],
+    end_month: Optional[int],
+) -> None:
+    """
+    Validate that a year/month range is logically ordered.
+    Only checked when both endpoints are fully specified.
+    """
+    if start_year is not None and end_year is not None:
+        s = (start_year, start_month if start_month is not None else 1)
+        e = (end_year,   end_month   if end_month   is not None else 12)
+        if e < s:
+            raise ValueError(
+                f"End period ({end_year}-{end_month or 12:02d}) must not precede "
+                f"start period ({start_year}-{start_month or 1:02d})."
+            )
 
 
 def _validate_pagination(offset: Any, limit: Any) -> tuple[int, int]:
     """Validate and clamp pagination parameters."""
     try:
         offset = int(offset)
-        limit = int(limit)
+        limit  = int(limit)
     except (TypeError, ValueError):
         raise ValueError("'offset' and 'limit' must be integers.")
     if offset < 0:
@@ -81,19 +164,30 @@ def _ok(data: Any) -> list[types.TextContent]:
 
 
 async def _get(path: str, params: Optional[Dict] = None) -> Any:
-    """Perform an async GET against the FastAPI backend."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(f"{API_BASE_URL}{path}", params=params)
-        if response.status_code == 404:
-            raise LookupError(response.json().get("detail", "Resource not found."))
-        if response.status_code != 200:
-            detail = response.text
-            try:
-                detail = response.json().get("detail", detail)
-            except Exception:
-                pass
-            raise RuntimeError(f"Backend returned HTTP {response.status_code}: {detail}")
-        return response.json()
+    """
+    Perform an async GET against the FastAPI backend using httpx streaming.
+
+    Using client.stream() releases the socket as soon as headers arrive and
+    reads the body incrementally, which avoids blocking on large responses.
+    A 60-second timeout is used (vs 30 previously) to accommodate larger payloads.
+    """
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("GET", f"{API_BASE_URL}{path}", params=params) as response:
+            # Read body incrementally so the socket is not held open unnecessarily
+            body = await response.aread()
+            if response.status_code == 404:
+                try:
+                    detail = json.loads(body).get("detail", "Resource not found.")
+                except Exception:
+                    detail = "Resource not found."
+                raise LookupError(detail)
+            if response.status_code != 200:
+                try:
+                    detail = json.loads(body).get("detail", body.decode())
+                except Exception:
+                    detail = body.decode()
+                raise RuntimeError(f"Backend returned HTTP {response.status_code}: {detail}")
+            return json.loads(body)
 
 # ---------------------------------------------------------------------------
 # MCP Server setup
@@ -220,6 +314,7 @@ async def list_tools() -> list[types.Tool]:
                 "Records are ordered newest-first. "
                 "The date range [startBusinessDate, endBusinessDate) is half-open (start inclusive, end exclusive). "
                 f"Maximum allowed range: {MAX_DATE_RANGE_DAYS} days. Requests exceeding this will be rejected. "
+                f"Dates must be between {EARLIEST_DATE} and approximately {LATEST_DATE}. "
                 "Inputs: assetId, dataSourceId, startBusinessDate (YYYY-MM-DD), endBusinessDate (YYYY-MM-DD), "
                 "includeAttributes (optional bool, default false). "
                 "Output: { data: { assetId, dataSourceId, records: [...] }, attributes? }."
@@ -239,7 +334,7 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "startBusinessDate": {
                         "type": "string",
-                        "description": "Start of the date range, inclusive. Format: YYYY-MM-DD.",
+                        "description": f"Start of the date range, inclusive. Format: YYYY-MM-DD. Min: {EARLIEST_DATE}.",
                         "pattern": r"^\d{4}-\d{2}-\d{2}$",
                     },
                     "endBusinessDate": {
@@ -264,22 +359,23 @@ async def list_tools() -> list[types.Tool]:
                 "Each record contains aggregated metrics for a given asset/source/year/month combination: "
                 "avg open, avg close, min low, max high, total volume, avg volume, and monthly return %. "
                 "Filter by assetId, dataSourceId, symbol, assetClass, and/or a year-month range. "
+                "When providing a range, endYear/endMonth must not precede startYear/startMonth. "
                 "Inputs: all optional filters + offset/limit for pagination. "
                 "Output: { items: [...], offset, limit, count }."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "assetId": {"type": "string", "description": "Filter by asset identifier."},
-                    "dataSourceId": {"type": "string", "description": "Filter by data source identifier."},
-                    "symbol": {"type": "string", "description": "Filter by ticker symbol (e.g. 'AAPL')."},
-                    "assetClass": {"type": "string", "description": "Filter by asset class (e.g. 'stock', 'crypto')."},
-                    "startYear": {"type": "integer", "description": "Start year (inclusive)."},
-                    "startMonth": {"type": "integer", "description": "Start month 1-12 (inclusive).", "minimum": 1, "maximum": 12},
-                    "endYear": {"type": "integer", "description": "End year (inclusive)."},
-                    "endMonth": {"type": "integer", "description": "End month 1-12 (inclusive).", "minimum": 1, "maximum": 12},
-                    "offset": {"type": "integer", "description": "Pagination offset. Default: 0.", "default": 0, "minimum": 0},
-                    "limit": {"type": "integer", "description": f"Page size. Default: {DEFAULT_LIMIT}, max: {MAX_LIMIT}.", "default": DEFAULT_LIMIT, "minimum": 1, "maximum": MAX_LIMIT},
+                    "assetId":      {"type": "string",  "description": "Filter by asset identifier."},
+                    "dataSourceId": {"type": "string",  "description": "Filter by data source identifier."},
+                    "symbol":       {"type": "string",  "description": "Filter by ticker symbol (e.g. 'AAPL')."},
+                    "assetClass":   {"type": "string",  "description": "Filter by asset class (e.g. 'stock', 'crypto')."},
+                    "startYear":    {"type": "integer", "description": "Start year (inclusive)."},
+                    "startMonth":   {"type": "integer", "description": "Start month 1-12 (inclusive).", "minimum": 1, "maximum": 12},
+                    "endYear":      {"type": "integer", "description": "End year (inclusive)."},
+                    "endMonth":     {"type": "integer", "description": "End month 1-12 (inclusive).", "minimum": 1, "maximum": 12},
+                    "offset":       {"type": "integer", "description": "Pagination offset. Default: 0.", "default": 0, "minimum": 0},
+                    "limit":        {"type": "integer", "description": f"Page size. Default: {DEFAULT_LIMIT}, max: {MAX_LIMIT}.", "default": DEFAULT_LIMIT, "minimum": 1, "maximum": MAX_LIMIT},
                 },
                 "required": [],
             },
@@ -292,6 +388,7 @@ async def list_tools() -> list[types.Tool]:
                 "Predictions are produced by a linear regression model trained per asset/source pair. "
                 "Each record contains actual_open, predicted_open, close, low, high, model_type, and generated_at. "
                 "Filter by assetId, dataSourceId, modelType, and/or a business date range. "
+                f"Dates must be in YYYY-MM-DD format and between {EARLIEST_DATE} and approximately {LATEST_DATE}. "
                 "Inputs: all optional filters + offset/limit for pagination. "
                 "Output: { items: [...], offset, limit, count }. "
                 "Do not use predictions as financial advice; they reflect model output only."
@@ -299,13 +396,13 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "assetId": {"type": "string", "description": "Filter by asset identifier."},
-                    "dataSourceId": {"type": "string", "description": "Filter by data source identifier."},
-                    "modelType": {"type": "string", "description": "Filter by model type (e.g. 'linear_regression_per_asset')."},
-                    "startBusinessDate": {"type": "string", "description": "Start date inclusive. Format: YYYY-MM-DD.", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
-                    "endBusinessDate": {"type": "string", "description": "End date exclusive. Format: YYYY-MM-DD.", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
-                    "offset": {"type": "integer", "description": "Pagination offset. Default: 0.", "default": 0, "minimum": 0},
-                    "limit": {"type": "integer", "description": f"Page size. Default: {DEFAULT_LIMIT}, max: {MAX_LIMIT}.", "default": DEFAULT_LIMIT, "minimum": 1, "maximum": MAX_LIMIT},
+                    "assetId":           {"type": "string", "description": "Filter by asset identifier."},
+                    "dataSourceId":      {"type": "string", "description": "Filter by data source identifier."},
+                    "modelType":         {"type": "string", "description": "Filter by model type (e.g. 'linear_regression_per_asset')."},
+                    "startBusinessDate": {"type": "string", "description": f"Start date inclusive. Format: YYYY-MM-DD. Min: {EARLIEST_DATE}.", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+                    "endBusinessDate":   {"type": "string", "description": "End date exclusive. Format: YYYY-MM-DD.", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+                    "offset":            {"type": "integer", "description": "Pagination offset. Default: 0.", "default": 0, "minimum": 0},
+                    "limit":             {"type": "integer", "description": f"Page size. Default: {DEFAULT_LIMIT}, max: {MAX_LIMIT}.", "default": DEFAULT_LIMIT, "minimum": 1, "maximum": MAX_LIMIT},
                 },
                 "required": [],
             },
@@ -341,7 +438,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except (LookupError, RuntimeError) as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # get_asset_details
@@ -365,7 +462,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except (ValueError, RuntimeError) as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # list_data_sources
@@ -389,7 +486,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except (LookupError, RuntimeError) as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # get_data_source_details
@@ -413,17 +510,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except (ValueError, RuntimeError) as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # get_time_series_data
     # -----------------------------------------------------------------------
     elif name == "get_time_series_data":
         try:
-            asset_id = arguments.get("assetId", "").strip()
-            source_id = arguments.get("dataSourceId", "").strip()
-            start_str = arguments.get("startBusinessDate", "").strip()
-            end_str = arguments.get("endBusinessDate", "").strip()
+            asset_id     = arguments.get("assetId", "").strip()
+            source_id    = arguments.get("dataSourceId", "").strip()
+            start_str    = arguments.get("startBusinessDate", "").strip()
+            end_str      = arguments.get("endBusinessDate", "").strip()
             include_attrs = bool(arguments.get("includeAttributes", False))
 
             if not asset_id:
@@ -435,36 +532,22 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
             if not end_str:
                 return _error("Invalid input: 'endBusinessDate' is required.")
 
-            start_date = _validate_date(start_str, "startBusinessDate")
-            end_date = _validate_date(end_str, "endBusinessDate")
-
-            if end_date <= start_date:
-                return _error(
-                    f"Invalid range: 'endBusinessDate' ({end_str}) must be after 'startBusinessDate' ({start_str}). "
-                    "Note: the range is half-open [start, end)."
-                )
-
-            delta = (end_date - start_date).days
-            if delta > MAX_DATE_RANGE_DAYS:
-                return _error(
-                    f"Date range too large: {delta} days requested, maximum allowed is {MAX_DATE_RANGE_DAYS} days. "
-                    "Please narrow your date range and make multiple requests if needed."
-                )
+            # Unified date-range validation (format, calendar, bounds, ordering, max span)
+            _validate_date_range(start_str, end_str)
 
             data = await _get("/api/v1/data", params={
-                "assetId": asset_id,
-                "dataSourceId": source_id,
+                "assetId":           asset_id,
+                "dataSourceId":      source_id,
                 "startBusinessDate": start_str,
-                "endBusinessDate": end_str,
+                "endBusinessDate":   end_str,
                 "includeAttributes": str(include_attrs).lower(),
             })
 
-            # Enrich response with provenance metadata
             data["_provenance"] = {
-                "assetId": asset_id,
-                "dataSourceId": source_id,
+                "assetId":           asset_id,
+                "dataSourceId":      source_id,
                 "startBusinessDate": start_str,
-                "endBusinessDate": end_str,
+                "endBusinessDate":   end_str,
                 "semantics": "half-open interval [startBusinessDate, endBusinessDate), latest version per business date, ordered newest-first",
             }
             return _ok(data)
@@ -476,7 +559,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except RuntimeError as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # get_monthly_analytics
@@ -491,27 +574,32 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
             params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
             if arguments.get("assetId"):
-                params["assetId"] = arguments["assetId"].strip()
+                params["assetId"]      = arguments["assetId"].strip()
             if arguments.get("dataSourceId"):
                 params["dataSourceId"] = arguments["dataSourceId"].strip()
             if arguments.get("symbol"):
-                params["symbol"] = arguments["symbol"].strip()
+                params["symbol"]       = arguments["symbol"].strip()
             if arguments.get("assetClass"):
-                params["assetClass"] = arguments["assetClass"].strip()
-            if arguments.get("startYear") is not None:
-                params["startYear"] = int(arguments["startYear"])
-            if arguments.get("startMonth") is not None:
-                params["startMonth"] = int(arguments["startMonth"])
-            if arguments.get("endYear") is not None:
-                params["endYear"] = int(arguments["endYear"])
-            if arguments.get("endMonth") is not None:
-                params["endMonth"] = int(arguments["endMonth"])
+                params["assetClass"]   = arguments["assetClass"].strip()
+
+            start_year  = int(arguments["startYear"])  if arguments.get("startYear")  is not None else None
+            start_month = int(arguments["startMonth"]) if arguments.get("startMonth") is not None else None
+            end_year    = int(arguments["endYear"])    if arguments.get("endYear")    is not None else None
+            end_month   = int(arguments["endMonth"])   if arguments.get("endMonth")   is not None else None
+
+            # Validate month/year range ordering
+            _validate_month_range(start_year, start_month, end_year, end_month)
+
+            if start_year  is not None: params["startYear"]  = start_year
+            if start_month is not None: params["startMonth"] = start_month
+            if end_year    is not None: params["endYear"]    = end_year
+            if end_month   is not None: params["endMonth"]   = end_month
 
             data = await _get("/api/v1/analytics/monthly", params=params)
             data["_provenance"] = {
                 "warehouse": "financial-dwh",
-                "endpoint": "/api/v1/analytics/monthly",
-                "filters": {k: v for k, v in params.items() if k not in ("offset", "limit")},
+                "endpoint":  "/api/v1/analytics/monthly",
+                "filters":   {k: v for k, v in params.items() if k not in ("offset", "limit")},
                 "semantics": "pre-computed monthly aggregations from warehouse time-series data",
                 "retrievedAt": datetime.utcnow().isoformat() + "Z",
             }
@@ -522,7 +610,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except (LookupError, RuntimeError) as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # get_predictions
@@ -537,39 +625,33 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
             params: Dict[str, Any] = {"offset": offset, "limit": limit}
 
             if arguments.get("assetId"):
-                params["assetId"] = arguments["assetId"].strip()
+                params["assetId"]      = arguments["assetId"].strip()
             if arguments.get("dataSourceId"):
                 params["dataSourceId"] = arguments["dataSourceId"].strip()
             if arguments.get("modelType"):
-                params["modelType"] = arguments["modelType"].strip()
+                params["modelType"]    = arguments["modelType"].strip()
 
             start_str = arguments.get("startBusinessDate", "").strip()
-            end_str = arguments.get("endBusinessDate", "").strip()
-
-            if start_str:
-                _validate_date(start_str, "startBusinessDate")
-                params["startBusinessDate"] = start_str
-            if end_str:
-                _validate_date(end_str, "endBusinessDate")
-                params["endBusinessDate"] = end_str
+            end_str   = arguments.get("endBusinessDate",   "").strip()
 
             if start_str and end_str:
-                start_date = datetime.strptime(start_str, "%Y-%m-%d").date()
-                end_date = datetime.strptime(end_str, "%Y-%m-%d").date()
-                if end_date <= start_date:
-                    return _error("'endBusinessDate' must be after 'startBusinessDate'.")
-                delta = (end_date - start_date).days
-                if delta > MAX_DATE_RANGE_DAYS:
-                    return _error(
-                        f"Date range too large: {delta} days. Maximum allowed is {MAX_DATE_RANGE_DAYS} days."
-                    )
+                # Both provided — full range validation (format, bounds, ordering, span)
+                _validate_date_range(start_str, end_str)
+                params["startBusinessDate"] = start_str
+                params["endBusinessDate"]   = end_str
+            elif start_str:
+                _validate_date(start_str, "startBusinessDate")
+                params["startBusinessDate"] = start_str
+            elif end_str:
+                _validate_date(end_str, "endBusinessDate")
+                params["endBusinessDate"] = end_str
 
             data = await _get("/api/v1/analytics/predictions", params=params)
             data["_disclaimer"] = "Predictions are model output only and do not constitute financial advice."
             data["_provenance"] = {
                 "warehouse": "financial-dwh",
-                "endpoint": "/api/v1/analytics/predictions",
-                "filters": {k: v for k, v in params.items() if k not in ("offset", "limit")},
+                "endpoint":  "/api/v1/analytics/predictions",
+                "filters":   {k: v for k, v in params.items() if k not in ("offset", "limit")},
                 "semantics": "ML model predictions stored in warehouse, not real-time inference",
                 "retrievedAt": datetime.utcnow().isoformat() + "Z",
             }
@@ -580,7 +662,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> list[types.TextCont
         except (LookupError, RuntimeError) as e:
             return _error(str(e))
         except httpx.ConnectError:
-            return _error("Cannot reach the Financial DWH API. Make sure the FastAPI server is running on " + API_BASE_URL)
+            return _error(f"Cannot reach the Financial DWH API. Make sure the FastAPI server is running on {API_BASE_URL}")
 
     # -----------------------------------------------------------------------
     # Unknown tool
